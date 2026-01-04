@@ -556,6 +556,9 @@
             <div class="nav-item" onclick="navigate('add_address')" title="Locations">
                 <i data-lucide="map-pin" width="20"></i>
             </div>
+            <div class="nav-item" onclick="navigate('support')" title="Support">
+                <i data-lucide="message-circle" width="20"></i>
+            </div>
         </nav>
     </aside>
 
@@ -716,6 +719,27 @@
             </div>
         </div>
 
+        <!-- SUPPORT CHATS VIEW -->
+        <div id="view-support" class="hidden reveal">
+            <div class="cellulose-card full-width">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <span class="card-label">Support Messages</span>
+                </div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Last Message</th>
+                            <th>Time</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="support-chats-body"></tbody>
+                </table>
+            </div>
+        </div>
+
     </main>
 
     <!-- MODALS -->
@@ -737,6 +761,10 @@
                         <option value="Men">Men</option>
                         <option value="Women">Women</option>
                     </select>
+                </div>
+                <div style="margin-bottom:15px;">
+                    <label>Description</label>
+                    <input type="text" id="prod-desc" placeholder="e.g. Premium Care, Button-downs, etc.">
                 </div>
                 <div style="margin-bottom:15px;">
                     <label>Schematic URL</label>
@@ -822,6 +850,35 @@
         </div>
     </div>
 
+    <!-- Chat Detail Modal -->
+    <div id="chat-detail-modal" class="modal-backdrop">
+        <div class="modal-content" style="max-width: 600px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div
+                style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px;">
+                <div>
+                    <h3 class="card-label" style="margin:0;">Support Chat</h3>
+                    <div id="chat-user-info"
+                        style="font-family:'JetBrains Mono'; font-size:0.75rem; color:var(--text-mono); margin-top:5px;">
+                    </div>
+                </div>
+                <button onclick="closeChatDetail()"
+                    style="background:none; border:none; cursor:pointer; color:var(--text-mono); font-size:1.5rem;">&times;</button>
+            </div>
+
+            <div id="admin-chat-messages"
+                style="flex:1; overflow-y:auto; max-height: 400px; margin-bottom: 20px; padding-right: 10px;">
+                <!-- Messages will be injected here -->
+            </div>
+
+            <div style="display:flex; gap:10px; border-top:1px solid var(--border); padding-top:15px;">
+                <input type="text" id="admin-chat-input" placeholder="Type your reply..." style="flex:1;">
+                <button onclick="adminChat.sendReply()" class="btn-primary">
+                    <i data-lucide="send" style="width:16px; vertical-align:middle;"></i> Send
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
@@ -853,7 +910,7 @@
         // --- Batch Delete State ---
         let isSelectionMode = false;
         let selectedIds = new Set();
-        let currentSelectionType = null; // 'orders', 'users', 'products', 'address'
+        let currentSelectionType = null; // 'orders', 'users', 'products', 'address', 'support'
         let longPressTimer;
 
         // --- Batch Delete Logic ---
@@ -943,6 +1000,8 @@
                 renderProducts();
             } else if (currentSelectionType === 'address') {
                 renderAddresses();
+            } else if (currentSelectionType === 'support') {
+                adminChat.renderChatList();
             }
         }
 
@@ -999,6 +1058,8 @@
                     // Admin.html:1014 db.ref('serviceAreas').push(val); 
                     // This creates a global list of service areas. It's not user-specific addresses in that node.
                     // User specific addresses are on the user object: u.address. So deleting user deletes that.
+                } else if (currentSelectionType === 'support') {
+                    updates['supportChats/' + id] = null;
                 }
             });
 
@@ -1337,6 +1398,7 @@
             const p = {
                 name: document.getElementById('prod-name').value,
                 cat: document.getElementById('prod-cat').value,
+                description: document.getElementById('prod-desc').value || 'Premium Care',
                 img: document.getElementById('prod-img').value,
                 prices: {
                     iron: parseInt(document.getElementById('prod-p-iron').value) || 0,
@@ -1369,12 +1431,13 @@
                 'all_orders': 'Order Registry',
                 'users': 'User Database',
                 'add_product': 'Product Matrix',
-                'add_address': 'Sector Map'
+                'add_address': 'Sector Map',
+                'support': 'Support Messages'
             };
             document.getElementById('page-title').innerText = titles[view] || 'Unknown Node';
 
             // Toggle Views
-            ['view-dashboard', 'view-orders', 'view-users', 'view-products', 'view-address'].forEach(id => {
+            ['view-dashboard', 'view-orders', 'view-users', 'view-products', 'view-address', 'view-support'].forEach(id => {
                 document.getElementById(id).classList.add('hidden');
             });
 
@@ -1383,7 +1446,8 @@
                 'all_orders': 'view-orders',
                 'users': 'view-users',
                 'add_product': 'view-products',
-                'add_address': 'view-address'
+                'add_address': 'view-address',
+                'support': 'view-support'
             };
             document.getElementById(map[view]).classList.remove('hidden');
 
@@ -1446,6 +1510,30 @@
             let itemManifestHtml = '';
             if (txn.bags && txn.bags.length > 0) {
                 txn.bags.forEach((bag, idx) => {
+                    // Get service types with color coding
+                    const services = bag.services || bag.service || [];
+                    const serviceArray = Array.isArray(services) ? services : [services];
+
+                    const serviceColors = {
+                        'iron': { bg: 'rgba(251, 191, 36, 0.15)', text: '#F59E0B', border: '#F59E0B' },
+                        'wash': { bg: 'rgba(16, 185, 129, 0.15)', text: '#10B981', border: '#10B981' },
+                        'dry': { bg: 'rgba(139, 92, 246, 0.15)', text: '#8B5CF6', border: '#8B5CF6' },
+                        'unknown': { bg: 'rgba(128, 128, 128, 0.15)', text: '#888', border: '#888' }
+                    };
+
+                    // Create badges for all services
+                    const serviceBadges = serviceArray.length > 0
+                        ? serviceArray.map(service => {
+                            const s = String(service).toLowerCase();
+                            const serviceStyle = serviceColors[s] || serviceColors.unknown;
+                            return `<span style="display:inline-block; padding:3px 8px; background:${serviceStyle.bg}; color:${serviceStyle.text}; border:1px solid ${serviceStyle.border}; font-size:0.65rem; text-transform:uppercase; letter-spacing:1px; border-radius:3px; margin-left:5px;">${service.toUpperCase()}</span>`;
+                        }).join('')
+                        : '<span style="display:inline-block; padding:3px 8px; background:rgba(128, 128, 128, 0.15); color:#888; border:1px solid #888; font-size:0.65rem; text-transform:uppercase; letter-spacing:1px; border-radius:3px; margin-left:5px;">UNKNOWN</span>';
+
+                    // Get border color from first service
+                    const firstService = serviceArray[0] ? String(serviceArray[0]).toLowerCase() : 'unknown';
+                    const borderColor = (serviceColors[firstService] || serviceColors.unknown).border;
+
                     let itemsStr = '';
                     if (bag.items) {
                         itemsStr = bag.items.map(i => {
@@ -1458,8 +1546,10 @@
                     }
 
                     itemManifestHtml += `
-                        <div style="background:#111; padding:12px; margin-bottom:10px; border-left: 2px solid #d4af37;">
-                            <div style="font-family:'JetBrains Mono'; color:#fff; font-weight:bold; font-size:0.8rem; text-transform:uppercase; margin-bottom:5px;">BAG ${idx + 1}</div>
+                        <div style="background:#111; padding:12px; margin-bottom:10px; border-left: 2px solid ${borderColor};">
+                            <div style="font-family:'JetBrains Mono'; color:#fff; font-weight:bold; font-size:0.8rem; text-transform:uppercase; margin-bottom:5px; display:flex; align-items:center;">
+                                BAG ${idx + 1}${serviceBadges}
+                            </div>
                             <div>${itemsStr || '<i style="font-size:0.7rem; color:#555;">Empty</i>'}</div>
                         </div>
                     `;
@@ -1522,6 +1612,7 @@
             editingProductKey = key;
             document.getElementById('prod-name').value = p.name;
             document.getElementById('prod-cat').value = p.cat;
+            document.getElementById('prod-desc').value = p.description || '';
             document.getElementById('prod-img').value = p.img;
             document.getElementById('prod-p-iron').value = p.prices?.iron || 0;
             document.getElementById('prod-p-wash').value = p.prices?.wash || 0;
@@ -1532,9 +1623,224 @@
         function openAddressModal() { document.getElementById('address-modal').classList.add('modal-active'); }
         function closeAddressModal() { document.getElementById('address-modal').classList.remove('modal-active'); document.getElementById('address-form').reset(); }
 
+        function closeChatDetail() {
+            document.getElementById('chat-detail-modal').classList.remove('modal-active');
+            if (adminChat.currentChatId) {
+                db.ref(`supportChats/${adminChat.currentChatId}/messages`).off('child_added');
+            }
+        }
+
+        // --- Admin Chat Logic ---
+        const adminChat = {
+            currentChatId: null,
+            chatsData: [],
+
+            loadChats() {
+                db.ref('supportChats').on('value', snapshot => {
+                    const chats = snapshot.val();
+                    if (chats) {
+                        this.chatsData = Object.keys(chats).map(key => ({
+                            id: key,
+                            ...chats[key]
+                        })).sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
+                    } else {
+                        this.chatsData = [];
+                    }
+                    this.renderChatList();
+                });
+            },
+
+            renderChatList() {
+                const tbody = document.getElementById('support-chats-body');
+                if (this.chatsData.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-mono); padding:30px;">No support chats found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = this.chatsData.map(chat => {
+                    const timeAgo = this.getTimeAgo(chat.lastMessageTime);
+                    const status = chat.status || 'active';
+                    const statusClass = status === 'resolved' ? 'status-success' : 'status-warning';
+
+                    // Selection Logic
+                    const isSelected = selectedIds.has(chat.id);
+                    const rowClass = (isSelectionMode && isSelected) ? 'row-selected' : '';
+                    const checkbox = `<div class="select-checkbox ${isSelected ? 'checked' : ''}" style="margin-right:10px; vertical-align:middle;"></div>`;
+
+                    const longPressEvents = `
+                        onmousedown="startLongPress('support', '${chat.id}')"
+                        ontouchstart="startLongPress('support', '${chat.id}')" 
+                        onmouseup="cancelLongPress()" 
+                        onmouseleave="cancelLongPress()"
+                        ontouchend="cancelLongPress()"
+                        onclick="if(isSelectionMode) { event.stopPropagation(); toggleSelection('${chat.id}', 'support'); } else { adminChat.openChat('${chat.id}'); }"
+                    `;
+
+                    return `
+                        <tr class="${rowClass}" ${longPressEvents} style="cursor:pointer; transition:background 0.2s;">
+                            <td style="display:flex; align-items:center;">
+                                ${checkbox}
+                                <div>
+                                    <div style="font-weight:700;">${chat.userName || 'Unknown User'}</div>
+                                    <div style="color:var(--text-mono); font-size:0.75rem;">${chat.userPhone || 'No phone'}</div>
+                                </div>
+                            </td>
+                            <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                ${chat.lastMessage || 'No messages'}
+                            </td>
+                            <td style="font-family:'JetBrains Mono'; font-size:0.75rem; color:var(--text-mono);">
+                                ${timeAgo}
+                            </td>
+                            <td><span class="status-tag ${statusClass}">${status.toUpperCase()}</span></td>
+                            <td>
+                                <button onclick="event.stopPropagation(); adminChat.openChat('${chat.id}')" class="btn-secondary" style="padding:5px 10px; font-size:0.7rem;">
+                                    <i data-lucide="message-square" style="width:12px; vertical-align:middle;"></i> VIEW
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                lucide.createIcons();
+            },
+
+            openChat(chatId) {
+                this.currentChatId = chatId;
+                const chat = this.chatsData.find(c => c.id === chatId);
+
+                if (!chat) return;
+
+                // Update chat user info
+                document.getElementById('chat-user-info').innerHTML = `
+                    ${chat.userName || 'Unknown'} • ${chat.userPhone || 'No phone'}
+                `;
+
+                // Clear previous messages
+                document.getElementById('admin-chat-messages').innerHTML = '<p style="text-align:center; color:var(--text-mono);">Loading messages...</p>';
+
+                // Load messages
+                db.ref(`supportChats/${chatId}/messages`).once('value').then(snapshot => {
+                    const messages = snapshot.val();
+                    const messagesContainer = document.getElementById('admin-chat-messages');
+                    messagesContainer.innerHTML = '';
+
+                    if (messages) {
+                        const sortedMessages = Object.values(messages).sort((a, b) => a.timestamp - b.timestamp);
+                        sortedMessages.forEach(msg => {
+                            this.addMessageToChat(msg);
+                        });
+                    } else {
+                        messagesContainer.innerHTML = '<p style="text-align:center; color:var(--text-mono);">No messages yet</p>';
+                    }
+
+                    this.scrollChatToBottom();
+
+                    // Listen for new messages
+                    this.listenForNewMessages(chatId);
+                }).catch(err => {
+                    console.error('Error loading chat:', err);
+                });
+
+                // Show modal
+                document.getElementById('chat-detail-modal').classList.add('modal-active');
+            },
+
+            listenForNewMessages(chatId) {
+                // Clean up previous listener
+                db.ref(`supportChats/${chatId}/messages`).off('child_added');
+
+                // Listen for new messages
+                db.ref(`supportChats/${chatId}/messages`).on('child_added', snapshot => {
+                    const msg = snapshot.val();
+                    // Check if message already exists to avoid duplicates
+                    const container = document.getElementById('admin-chat-messages');
+                    if (container && !container.querySelector(`[data-msg-time="${msg.timestamp}"]`)) {
+                        this.addMessageToChat(msg);
+                        this.scrollChatToBottom();
+                    }
+                });
+            },
+
+            addMessageToChat(msg) {
+                const container = document.getElementById('admin-chat-messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.setAttribute('data-msg-time', msg.timestamp);
+
+                const isAdmin = msg.sender === 'admin';
+                const align = isAdmin ? 'flex-end' : 'flex-start';
+                const bgColor = isAdmin ? 'var(--accent)' : '#111';
+                const textColor = isAdmin ? '#000' : '#fff';
+                const borderRadius = isAdmin ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
+
+                messageDiv.style.cssText = `display:flex; justify-content:${align}; margin-bottom:12px;`;
+                messageDiv.innerHTML = `
+                    <div style="background:${bgColor}; color:${textColor}; padding:12px 16px; border-radius:${borderRadius}; max-width:70%; border:1px solid var(--border);">
+                        <div style="font-size:0.85rem; line-height:1.5;">${msg.message}</div>
+                        <div style="font-size:0.65rem; opacity:0.7; margin-top:5px; font-family:'JetBrains Mono';">
+                            ${isAdmin ? 'You' : msg.senderName || 'User'} • ${new Date(msg.timestamp).toLocaleTimeString()}
+                        </div>
+                    </div>
+                `;
+
+                container.appendChild(messageDiv);
+            },
+
+            sendReply() {
+                const input = document.getElementById('admin-chat-input');
+                const message = input.value.trim();
+
+                if (!message || !this.currentChatId) return;
+
+                const messageData = {
+                    sender: 'admin',
+                    senderName: 'Support Team',
+                    message: message,
+                    timestamp: Date.now()
+                };
+
+                // Save to Firebase
+                db.ref(`supportChats/${this.currentChatId}/messages`).push(messageData).then(() => {
+                    // Update chat metadata
+                    db.ref(`supportChats/${this.currentChatId}`).update({
+                        lastMessage: message,
+                        lastMessageTime: Date.now(),
+                        updatedAt: Date.now()
+                    });
+
+                    input.value = '';
+                    console.log('✅ Reply sent');
+                }).catch(err => {
+                    console.error('❌ Error sending reply:', err);
+                    alert('Failed to send reply');
+                });
+            },
+
+            scrollChatToBottom() {
+                const container = document.getElementById('admin-chat-messages');
+                if (container) {
+                    setTimeout(() => {
+                        container.scrollTop = container.scrollHeight;
+                    }, 100);
+                }
+            },
+
+            getTimeAgo(timestamp) {
+                if (!timestamp) return 'Unknown';
+                const seconds = Math.floor((Date.now() - timestamp) / 1000);
+                if (seconds < 60) return 'Just now';
+                const minutes = Math.floor(seconds / 60);
+                if (minutes < 60) return `${minutes}m ago`;
+                const hours = Math.floor(minutes / 60);
+                if (hours < 24) return `${hours}h ago`;
+                const days = Math.floor(hours / 24);
+                return `${days}d ago`;
+            }
+        };
+
         // Start
         initCharts();
         fetchData();
+        adminChat.loadChats(); // Load support chats
 
     </script>
 </body>
